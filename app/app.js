@@ -174,7 +174,7 @@
         </article>`;
       };
       return `
-        <div class="page-head"><h1>My Garden</h1><button class="btn" data-action="add-plant">+ Add plant</button></div>
+        <div class="page-head"><h1>My Garden</h1><div class="row"><button class="btn ghost" data-action="calendar" aria-label="Calendar reminders">🔔 Reminders</button><button class="btn" data-action="add-plant">+ Add plant</button></div></div>
         ${growing.length ? `<div class="grid">${growing.map(card).join("")}</div>`
           : `<div class="card empty-state"><div class="emoji huge">🪴</div><p>Your garden is empty.</p><button class="btn" data-action="add-plant">Add your first plant</button></div>`}
         ${done.length ? `<details class="past"><summary>Past harvests (${done.length})</summary><div class="grid">${done.map(card).join("")}</div></details>` : ""}`;
@@ -340,13 +340,122 @@
           <small>Your days depend on your house number. Look them up on the <a href="https://www.watercorporation.com.au" target="_blank" rel="noopener">Water Corporation</a> website. Hand watering is allowed any day.</small>
         </fieldset>` : ""}
         <p class="muted">Your garden is saved in this browser only. Export a backup to move it to another device.</p>
-        <button class="btn wide" data-action="export">⬇️ Export backup</button>
+        <button class="btn wide" data-action="calendar">🔔 Calendar reminders</button>
+        <button class="btn wide ghost" data-action="export">⬇️ Export backup</button>
         <label class="btn wide ghost file">⬆️ Import backup<input type="file" accept="application/json,.json" data-action="import" hidden></label>
         <button class="btn wide danger" data-action="reset">Delete all data</button>
       </div>`);
   }
 
   // ---------- actions ----------
+  // ---------- calendar reminders (.ics) ----------
+  const REMIND_DAYS = 90;
+  const ICS_DAYS = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+  const icsText = (t) => String(t).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  const icsLocal = (iso, hhmm) => `${iso.replace(/-/g, "")}T${hhmm}00`;
+  function foldLine(line) {
+    // RFC 5545: lines over 75 octets continue on the next line after a space.
+    const enc = new TextEncoder(), out = [];
+    let cur = "", bytes = 0;
+    for (const ch of line) {
+      const n = enc.encode(ch).length;
+      if (bytes + n > 74) { out.push(cur); cur = " "; bytes = 1; }
+      cur += ch; bytes += n;
+    }
+    out.push(cur);
+    return out.join("\r\n");
+  }
+
+  function reminderEvents() {
+    const today = todayISO();
+    const until = icsLocal(addDays(today, REMIND_DAYS), "2359");
+    const events = [];
+
+    if (isPerth() && state.settings.sprinklerDays.length) {
+      const days = state.settings.sprinklerDays;
+      let start = today;
+      for (let i = 0; i < 120; i++) {
+        const d = parse(start);
+        if (days.includes(d.getDay()) && ![6, 7, 8].includes(d.getMonth() + 1)) break;
+        start = addDays(start, 1);
+      }
+      events.push({ uid: "sprinkler", start, time: "0630", mins: 30,
+        title: "💦 Sprinkler day",
+        desc: "Your roster day. Run sprinklers before 9am or after 6pm. (Paused for the winter switch-off, 1 Jun – 31 Aug.)",
+        rrule: `FREQ=WEEKLY;BYDAY=${days.map((d) => ICS_DAYS[d]).join(",")};BYMONTH=1,2,3,4,5,9,10,11,12` });
+    }
+
+    // Plants on the same schedule share one reminder, so mornings aren't a wall of alerts.
+    const groups = new Map();
+    state.garden.filter((g) => !g.harvested).forEach((g) => {
+      const next = info(g).nextWater < today ? today : info(g).nextWater;
+      const key = `${g.waterEvery}|${next}`;
+      if (!groups.has(key)) groups.set(key, { every: g.waterEvery, next, plants: [] });
+      groups.get(key).plants.push(g);
+    });
+    for (const { every, next, plants } of groups.values()) {
+      events.push({ uid: `water-${every}-${plants.map((g) => g.id).sort().join("-")}`, start: next, time: "0700", mins: 15,
+        title: `💧 Water: ${plants.map((g) => g.name).join(", ")}`,
+        desc: `Every ${plural(every, "day")}. ${plants.map((g) => g.name + (g.location ? ` (${g.location})` : "")).join(", ")}.`,
+        rrule: `FREQ=DAILY;INTERVAL=${every};UNTIL=${until}` });
+    }
+
+    state.tasks.filter((k) => !k.done && k.due && k.due >= today).forEach((k) => {
+      events.push({ uid: `task-${k.id}`, start: k.due, time: "0800", mins: 30, title: `✅ ${k.text}`, desc: "Garden job from Samwise's Gardening." });
+    });
+
+    if (isPerth()) {
+      const d = new Date();
+      for (let i = 1; i <= 12; i++) {
+        const first = new Date(d.getFullYear(), d.getMonth() + i, 1);
+        const iso = `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, "0")}-01`;
+        events.push({ uid: `perth-${iso.slice(0, 7)}`, start: iso, time: "0800", mins: 15,
+          title: `📍 Perth garden: ${first.toLocaleDateString(undefined, { month: "long" })} jobs`,
+          desc: PERTH_MONTHS[first.getMonth()] });
+      }
+    }
+    return events;
+  }
+
+  function buildICS(events) {
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+/, "");
+    const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Samwise's Gardening//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:Samwise's Gardening"];
+    for (const e of events) {
+      const end = new Date(parse(e.start).getTime() + (parseInt(e.time.slice(0, 2), 10) * 60 + parseInt(e.time.slice(2), 10) + e.mins) * 60000);
+      const endISO = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+      const endTime = `${String(end.getHours()).padStart(2, "0")}${String(end.getMinutes()).padStart(2, "0")}`;
+      lines.push("BEGIN:VEVENT", `UID:${e.uid}@samwise-gardening`, `DTSTAMP:${stamp}`,
+        `DTSTART:${icsLocal(e.start, e.time)}`, `DTEND:${icsLocal(endISO, endTime)}`,
+        `SUMMARY:${icsText(e.title)}`, `DESCRIPTION:${icsText(e.desc)}`);
+      if (e.rrule) lines.push(`RRULE:${e.rrule}`);
+      lines.push("BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${icsText(e.title)}`, "TRIGGER:PT0M", "END:VALARM", "END:VEVENT");
+    }
+    lines.push("END:VCALENDAR");
+    return lines.map(foldLine).join("\r\n") + "\r\n";
+  }
+
+  function calendarDialog() {
+    const events = reminderEvents();
+    const growing = state.garden.filter((g) => !g.harvested).length;
+    const jobs = events.filter((e) => e.uid.startsWith("task-")).length;
+    const sprinkler = events.some((e) => e.uid === "sprinkler");
+    openModal(`
+      <h2>🔔 Calendar reminders</h2>
+      <p>This downloads a calendar file. Open it on your phone and your calendar will alert you:</p>
+      <ul class="bullets">
+        ${growing ? `<li>💧 at 7am on watering days for your ${plural(growing, "plant")} (for the next ${REMIND_DAYS} days)</li>` : `<li class="muted">💧 No plants yet. Add some in My Garden for watering reminders.</li>`}
+        ${isPerth() ? (sprinkler ? `<li>💦 at 6:30am on your sprinkler days (paused June–August)</li>` : `<li class="muted">💦 Set your sprinkler days in Settings to get those too.</li>`) : ""}
+        ${jobs ? `<li>✅ at 8am for ${plural(jobs, "upcoming garden job")}</li>` : ""}
+        ${isPerth() ? `<li>📍 on the 1st of each month with Perth jobs for that month</li>` : ""}
+      </ul>
+      <button class="btn wide" data-action="download-ics">📅 Download reminders</button>
+      <details class="howto"><summary>How do I add it?</summary>
+        <p><b>iPhone:</b> tap Download, then open the file and tap <b>Add All</b>.</p>
+        <p><b>Android:</b> open the downloaded file with your calendar app (e.g. Samsung Calendar). If you use Google Calendar, go to calendar.google.com on a computer → Settings → <b>Import</b>.</p>
+      </details>
+      <p class="muted small">It's a snapshot. After adding or removing plants, changing watering days, or every few months, download it again. Some calendar apps add the new reminders alongside the old ones, so delete any old or doubled-up reminders from your calendar.</p>`);
+  }
+
   function water(id) {
     const g = state.garden.find((x) => x.id === id);
     if (g) { g.lastWatered = todayISO(); save(); toast(`💧 Watered ${g.name}`); }
@@ -385,6 +494,16 @@
     "cal-mine": (el) => { calMine = el.checked; render(); },
     settings: () => settings(),
     close: () => closeModal(),
+    calendar: () => calendarDialog(),
+    "download-ics": () => {
+      const blob = new Blob([buildICS(reminderEvents())], { type: "text/calendar;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "samwise-garden-reminders.ics";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast("📅 Reminders downloaded. Open the file to add them");
+    },
     export: () => {
       const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
       const a = document.createElement("a");

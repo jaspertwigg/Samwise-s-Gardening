@@ -12,6 +12,7 @@ A simple, offline-friendly gardening companion that runs in your browser, tailor
 - **Planting calendar** – sow and harvest months tailored to Perth's Mediterranean climate (generic northern/southern hemisphere calendars are available in Settings)
 - **Perth extras** – a monthly Perth jobs guide, sprinkler roster day reminders, the winter sprinkler switch-off (1 Jun – 31 Aug), and watering suggestions that adjust for summer heat and winter rain
 - **Journal** – dated notes, optionally linked to a plant
+- **Calendar reminders** – download a calendar file of watering, sprinkler-day, garden-job and monthly Perth reminders with alerts, for your phone's calendar
 - Installable on your phone (Add to Home Screen) and works offline
 - Data stays in your browser; export/import a backup from ⚙️ Settings
 

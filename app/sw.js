@@ -1,5 +1,5 @@
 // Network-first service worker so the app works offline but always picks up new deploys.
-const CACHE = "samwise-v2";
+const CACHE = "samwise-v3";
 const ASSETS = ["./", "index.html", "style.css", "app.js", "plants.js", "icon.svg", "manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
