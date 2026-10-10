@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Samwise's Gardening</title>
+  <meta name="description" content="Track your plants, watering, sowing calendar and garden journal.">
+  <meta name="theme-color" content="#3f6b3a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">🌱</span> Samwise's Gardening</div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings">⚙️</button>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabs" aria-label="Sections">
+    <button data-tab="today" class="active"><span>🏡</span>Today</button>
+    <button data-tab="garden"><span>🪴</span>My Garden</button>
+    <button data-tab="library"><span>📚</span>Plants</button>
+    <button data-tab="calendar"><span>📅</span>Calendar</button>
+    <button data-tab="journal"><span>📓</span>Journal</button>
+  </nav>
+
+  <dialog id="modal"><div id="modalBody"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="plants.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
