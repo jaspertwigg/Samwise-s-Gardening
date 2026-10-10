@@ -3,19 +3,22 @@
 
   const STORE_KEY = "samwise-garden-v1";
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const SOUTHERN_TZ = /^(Australia|Antarctica)\/|^Pacific\/(Auckland|Chatham|Fiji|Tongatapu)|^Africa\/(Johannesburg|Maputo|Harare|Windhoek|Gaborone|Maseru|Mbabane|Lusaka)|^America\/(Sao_Paulo|Argentina|Buenos_Aires|Santiago|Montevideo|Asuncion|Lima|La_Paz)|^Indian\/(Mauritius|Reunion)/;
+  const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const REGIONS = { perth: "Perth, WA", north: "Northern hemisphere (temperate)", south: "Southern hemisphere (temperate)" };
 
   // ---------- state ----------
-  function guessHemisphere() {
-    try { return SOUTHERN_TZ.test(Intl.DateTimeFormat().resolvedOptions().timeZone) ? "south" : "north"; }
-    catch { return "north"; }
+  function normalizeSettings(s) {
+    return {
+      region: REGIONS[s?.region] ? s.region : "perth",
+      sprinklerDays: Array.isArray(s?.sprinklerDays) ? s.sprinklerDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : [],
+    };
   }
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(STORE_KEY));
-      if (s && s.garden) return s;
+      if (s && s.garden) { s.settings = normalizeSettings(s.settings); return s; }
     } catch {}
-    return { settings: { hemisphere: guessHemisphere() }, garden: [], tasks: [], journal: [] };
+    return { settings: normalizeSettings(), garden: [], tasks: [], journal: [] };
   }
   let state = load();
   function save() {
@@ -33,10 +36,19 @@
   const addDays = (iso, n) => { const d = parse(iso); d.setDate(d.getDate() + n); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
   const fmtDate = (iso) => parse(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: parse(iso).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
   const plantById = (id) => PLANTS.find((p) => p.id === id);
-  const shiftMonth = (m) => state.settings.hemisphere === "south" ? ((m + 5) % 12) + 1 : m;
-  const sowMonths = (p) => p.sow.map(shiftMonth);
-  const harvestMonths = (p) => p.harvest.map(shiftMonth);
+  const isPerth = () => state.settings.region === "perth";
+  const shiftMonth = (m) => state.settings.region === "south" ? ((m + 5) % 12) + 1 : m;
+  const sowMonths = (p) => isPerth() ? p.perth.sow : p.sow.map(shiftMonth);
+  const harvestMonths = (p) => isPerth() ? p.perth.harvest : p.harvest.map(shiftMonth);
   const currentMonth = () => new Date().getMonth() + 1;
+  // Perth summers dry pots and sandy beds out fast; winter rain does much of the work.
+  function suggestWater(p) {
+    if (!isPerth()) return p.water;
+    const m = currentMonth();
+    if ([12, 1, 2].includes(m)) return Math.max(1, Math.ceil(p.water / 2));
+    if ([6, 7, 8].includes(m)) return p.water * 2;
+    return p.water;
+  }
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
   function toast(msg) {
@@ -93,6 +105,8 @@
             <div><b>${state.tasks.filter((x) => !x.done).length}</b><span>jobs to do</span></div>
           </div>
         </section>
+
+        ${isPerth() ? perthCard(m) : ""}
 
         <section class="card">
           <div class="card-head"><h2>💧 Needs watering</h2>
@@ -192,7 +206,10 @@
       const list = calMine ? PLANTS.filter((p) => mine.has(p.id)) : PLANTS;
       return `
         <div class="page-head"><h1>Planting Calendar</h1></div>
-        <p class="muted">For a temperate ${state.settings.hemisphere === "south" ? "southern" : "northern"} hemisphere garden — <button class="link" data-action="settings">change</button>. Adjust a few weeks for your local frost dates.</p>
+        <p class="muted">${isPerth()
+          ? "Tailored for Perth's Mediterranean climate: hot, dry summers and mild, wet winters. The main planting seasons are autumn (Mar–May) and spring (Sep–Nov)."
+          : `For a temperate ${state.settings.region === "south" ? "southern" : "northern"} hemisphere garden. Adjust a few weeks for your local frost dates.`}
+          <button class="link" data-action="settings">Change location</button></p>
         <div class="row legend">
           <span><i class="sw sow"></i>Sow / plant</span><span><i class="sw harv"></i>Harvest</span><span><i class="sw both"></i>Both</span>
           <label class="toggle"><input type="checkbox" data-action="cal-mine" ${calMine ? "checked" : ""}> Only my plants</label>
@@ -231,7 +248,29 @@
     },
   };
 
+  function perthCard(m) {
+    const days = state.settings.sprinklerDays;
+    const dow = new Date().getDay();
+    let sprinkler;
+    if ([6, 7, 8].includes(m)) {
+      sprinkler = "🚫 <b>Winter sprinkler switch-off</b> (1 Jun – 31 Aug). Hand water only if there's a dry spell.";
+    } else if (!days.length) {
+      sprinkler = `💦 <button class="link" data-action="settings">Set your sprinkler roster days</button> to get a reminder on the day.`;
+    } else if (days.includes(dow)) {
+      sprinkler = "💦 <b>Today is a sprinkler day.</b> Run them before 9am or after 6pm.";
+    } else {
+      const next = [1, 2, 3, 4, 5, 6, 7].map((n) => (dow + n) % 7).find((d) => days.includes(d));
+      sprinkler = `💦 Next sprinkler day: <b>${new Date(Date.now() + (((next - dow + 7) % 7) * 86400000)).toLocaleDateString(undefined, { weekday: "long" })}</b>.`;
+    }
+    return `<section class="card perth">
+      <h2>📍 Perth in ${new Date().toLocaleDateString(undefined, { month: "long" })}</h2>
+      <p>${PERTH_MONTHS[m - 1]}</p>
+      <p class="sprinkler">${sprinkler}</p>
+    </section>`;
+  }
+
   function render() {
+    $("#place").textContent = isPerth() ? "Perth, WA" : "";
     $("#view").innerHTML = views[tab]();
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   }
@@ -241,7 +280,7 @@
   const modal = $("#modal");
   function openModal(html) {
     $("#modalBody").innerHTML = `<button class="icon-btn close" data-action="close" aria-label="Close">✕</button>${html}`;
-    modal.showModal();
+    if (!modal.open) modal.showModal();
   }
   function closeModal() { modal.close(); }
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
@@ -253,20 +292,21 @@
       <div class="detail-head"><span class="emoji huge">${p.emoji}</span><div><h2>${esc(p.name)}</h2><small>${p.category}</small></div></div>
       <dl class="facts">
         <div><dt>☀️ Sun</dt><dd>${p.sun}</dd></div>
-        <div><dt>💧 Water</dt><dd>Every ${plural(p.water, "day")}</dd></div>
+        <div><dt>💧 Water</dt><dd>Every ${plural(suggestWater(p), "day")}${isPerth() && suggestWater(p) !== p.water ? " this season" : ""}</dd></div>
         <div><dt>📏 Spacing</dt><dd>${p.spacing} cm</dd></div>
         <div><dt>⏱️ To harvest</dt><dd>~${p.days} days</dd></div>
         <div><dt>🌱 Sow</dt><dd>${monthList(sowMonths(p))}</dd></div>
         <div><dt>🧺 Harvest</dt><dd>${monthList(harvestMonths(p))}</dd></div>
       </dl>
       <p>${esc(p.tips)}</p>
+      ${isPerth() && p.perthTip ? `<p class="perth-tip">📍 <b>Perth:</b> ${esc(p.perthTip)}</p>` : ""}
       ${p.companions.length ? `<p><b>👍 Good neighbours:</b> ${p.companions.map(esc).join(", ")}</p>` : ""}
       ${p.avoid.length ? `<p><b>👎 Keep apart from:</b> ${p.avoid.map(esc).join(", ")}</p>` : ""}
       <button class="btn wide" data-action="add-plant" data-id="${p.id}">+ Add to my garden</button>`);
   }
 
   function plantForm(existing, presetId) {
-    const g = existing || { plantId: presetId || "", name: presetId ? plantById(presetId).name : "", location: "", plantedOn: todayISO(), waterEvery: presetId ? plantById(presetId).water : 3, notes: "" };
+    const g = existing || { plantId: presetId || "", name: presetId ? plantById(presetId).name : "", location: "", plantedOn: todayISO(), waterEvery: presetId ? suggestWater(plantById(presetId)) : 3, notes: "" };
     openModal(`
       <h2>${existing ? "Edit plant" : "Add a plant"}</h2>
       <form data-form="plant" data-id="${existing ? existing.id : ""}" class="stack">
@@ -291,11 +331,14 @@
     openModal(`
       <h2>Settings</h2>
       <div class="stack">
-        <label>Hemisphere (sets the planting calendar)
-          <select data-action="hemisphere">
-            <option value="north" ${state.settings.hemisphere === "north" ? "selected" : ""}>Northern (UK, Europe, USA, Canada…)</option>
-            <option value="south" ${state.settings.hemisphere === "south" ? "selected" : ""}>Southern (Australia, NZ, South Africa…)</option>
+        <label>Location (sets the planting calendar)
+          <select data-action="region">
+            ${Object.entries(REGIONS).map(([k, v]) => `<option value="${k}" ${state.settings.region === k ? "selected" : ""}>${v}</option>`).join("")}
           </select></label>
+        ${isPerth() ? `<fieldset class="days"><legend>My sprinkler roster days</legend>
+          <div class="seg">${WEEKDAYS.map((d, i) => `<label><input type="checkbox" data-action="sprinkler-day" data-day="${i}" ${state.settings.sprinklerDays.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div>
+          <small>Your days depend on your house number. Look them up on the <a href="https://www.watercorporation.com.au" target="_blank" rel="noopener">Water Corporation</a> website. Hand watering is allowed any day.</small>
+        </fieldset>` : ""}
         <p class="muted">Your garden is saved in this browser only. Export a backup to move it to another device.</p>
         <button class="btn wide" data-action="export">⬇️ Export backup</button>
         <label class="btn wide ghost file">⬆️ Import backup<input type="file" accept="application/json,.json" data-action="import" hidden></label>
@@ -367,15 +410,20 @@
     const el = e.target;
     const a = el.dataset.action;
     if (a === "toggle-task" || a === "cal-mine") actions[a](el);
-    else if (a === "hemisphere") { state.settings.hemisphere = el.value; save(); render(); toast("Calendar updated"); }
+    else if (a === "region") { state.settings.region = el.value; save(); render(); settings(); toast("Calendar updated"); }
+    else if (a === "sprinkler-day") {
+      const d = Number(el.dataset.day), days = state.settings.sprinklerDays;
+      state.settings.sprinklerDays = el.checked ? [...new Set([...days, d])].sort() : days.filter((x) => x !== d);
+      save(); render();
+    }
     else if (a === "pick-type") {
       const p = plantById(el.value), f = el.form;
-      if (p) { if (!f.name.value || PLANTS.some((x) => x.name === f.name.value)) f.name.value = p.name; f.waterEvery.value = p.water; }
+      if (p) { if (!f.name.value || PLANTS.some((x) => x.name === f.name.value)) f.name.value = p.name; f.waterEvery.value = suggestWater(p); }
     } else if (a === "import" && el.files[0]) {
       el.files[0].text().then((txt) => {
         const data = JSON.parse(txt);
         if (!Array.isArray(data.garden) || !Array.isArray(data.tasks) || !Array.isArray(data.journal)) throw new Error("bad file");
-        state = { settings: { hemisphere: data.settings?.hemisphere === "south" ? "south" : "north" }, garden: data.garden, tasks: data.tasks, journal: data.journal };
+        state = { settings: normalizeSettings(data.settings), garden: data.garden, tasks: data.tasks, journal: data.journal };
         save(); closeModal(); render(); toast("Backup restored 🌿");
       }).catch(() => toast("That doesn't look like a garden backup"));
     }
